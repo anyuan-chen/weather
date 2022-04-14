@@ -59,21 +59,38 @@ type weather struct {
 	Temperature float64 `json:"temperature"`
 }
 func getWeather(w http.ResponseWriter, r *http.Request){
+	
 	params := r.URL.Query()
 	if len(params["city"]) == 0 {
 		http.Error(w, "invalid request", http.StatusInternalServerError)
 		return
 	}
 
+
 	weatherProviders := []weatherProvider{visualCrossing{}, openWeatherMap{}}
+	temps := make(chan float64, len(weatherProviders))
+	errs := make(chan error, len(weatherProviders))
+
 	var totalTemp float64
 	for _ , provider := range weatherProviders {
-		temp, error := provider.temperature(params["city"][0])
-		if error != nil {
-			http.Error(w, error.Error(), http.StatusInternalServerError)
+		go func (p weatherProvider) {
+			temp, error := p.temperature(params["city"][0])
+			if error != nil {
+				// http.Error(w, error.Error(), http.StatusInternalServerError)
+				errs <- error
+				return 
+			}
+			temps <- temp
+		}(provider)
+	}
+	for i := 0; i < len(weatherProviders); i++ {
+		select {
+		case temp := <- temps:
+			totalTemp += temp
+		case err := <- errs:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return 
 		}
-		totalTemp += temp
 	}
 	totalTemp = totalTemp / float64(len(weatherProviders))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
